@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from pathlib import Path
 import numpy as np
 import gymnasium as gym
 import gym_snake_game
@@ -141,6 +142,9 @@ if __name__ == "__main__":
     objective = nn.CrossEntropyLoss()
     optimizer = optim.Adam(params=net.parameters(), lr=0.001)
     writer = SummaryWriter(comment="-snake-cem")
+    run_dir = Path(writer.log_dir)
+    latest_model_path = run_dir / "model_latest.pth"
+    solved_model_path = run_dir / "model_solved.pth"
 
     for iter_no, batch in enumerate(iterate_batches(env, net, BATCH_SIZE)):
         obs_v, acts_v, reward_b, reward_m = filter_batch(batch, PERCENTILE)
@@ -154,7 +158,33 @@ if __name__ == "__main__":
         writer.add_scalar("loss", loss_v.item(), iter_no)
         writer.add_scalar("reward_bound", reward_b, iter_no)
         writer.add_scalar("reward_mean", reward_m, iter_no)
-        if reward_m > 6:
+        torch.save(
+            {
+                "state_dict": net.state_dict(),
+                "iter_no": iter_no,
+                "reward_mean": reward_m,
+                "reward_bound": reward_b,
+                "obs_size": obs_size,
+                "n_actions": n_actions,
+                "hidden_size": HIDDEN_SIZE,
+            },
+            latest_model_path,
+        )
+        if reward_m > 3:
+            torch.save(
+                {
+                    "state_dict": net.state_dict(),
+                    "iter_no": iter_no,
+                    "reward_mean": reward_m,
+                    "reward_bound": reward_b,
+                    "obs_size": obs_size,
+                    "n_actions": n_actions,
+                    "hidden_size": HIDDEN_SIZE,
+                },
+                solved_model_path,
+            )
             print("Solved!")
+            print(f"Saved solved model to: {solved_model_path}")
             break
+    print(f"Saved latest model to: {latest_model_path}")
     writer.close()

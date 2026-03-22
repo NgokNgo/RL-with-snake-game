@@ -7,12 +7,14 @@ class Snake:
     def __init__(
         self,
         fps=60,
-        max_step=500,
+        max_step=99999,
         init_length=4,
         food_reward=2.0,
         dist_reward=None,
         living_bonus=0.0,
         death_penalty=-1.0,
+        no_food_penalty=-0.002,
+        steps_since_food = 0,
         width=40,
         height=40,
         block_size=20,
@@ -30,7 +32,10 @@ class Snake:
         self.dist_reward = (
             width+height)//4 if dist_reward is None else dist_reward
         self.living_bonus = living_bonus
+        self.no_food_penalty = no_food_penalty
+        self.food_limit = width*height-1
         self.death_penalty = death_penalty
+        self.steps_since_food = steps_since_food
         self.blocks_x = width
         self.blocks_y = height
         self.food_color = food_color
@@ -85,8 +90,9 @@ class Snake:
             self.direction = direction
         self.head.x += step[0]
         self.head.y += step[1]
+        self.steps_since_food += 1
 
-        reward = self.living_bonus + self.calc_reward()
+        reward = self.living_bonus + self.calc_reward() + self.no_food_penalty*self.steps_since_food
         dead = False
 
         if self.head == self.food.block:
@@ -94,6 +100,7 @@ class Snake:
             self.grow(x, y)
             self.food.new_food(self.blocks)
             reward = self.food_reward
+            self.steps_since_food = 0
         else:
             self.move(x, y)
             for block in self.body:
@@ -101,6 +108,11 @@ class Snake:
                     dead = True
             if self.head.x >= self.blocks_x or self.head.x < 0 or self.head.y < 0 or self.head.y >= self.blocks_x:
                 dead = True
+
+        if not dead and self.steps_since_food > self.food_limit:
+            truncated = True
+            self.steps_since_food = 0
+
         if dead:
             reward = self.death_penalty
         return self.observation(dead), reward, dead, truncated
@@ -110,7 +122,10 @@ class Snake:
         dy = self.head.y - self.food.block.y
         dx, dy = normalize(dx, dy)
         d0, d1, d2, d3 = self.calc_distance(dead)
-        return np.array([dx, dy, d0, d1, d2, d3], dtype=np.float32)
+        front, left, right = self._head_cell_status(dead)
+        # chieu dai ran 
+        body_len = len(self.body)/ max(1, self.blocks_x*self.blocks_y)
+        return np.array([dx, dy, d0, d1, d2, d3, front, left, right, body_len], dtype=np.float32)
 
     def calc_distance(self, dead):
         if dead:
@@ -139,6 +154,39 @@ class Snake:
         self.map[self.food.block.x][self.food.block.y] = 1
         return d0/self.blocks_y, d1/self.blocks_y, d2/self.blocks_x, d3/self.blocks_x
 
+    def _cell_status(self, x: int, y: int) -> float:
+        if x < 0 or x >= self.blocks_x or y < 0 or y >= self.blocks_y:
+            return -1.0
+        if (x, y) == (self.food.block.x, self.food.block.y):
+            return 1.0
+        for block in self.body:
+            if (x, y) == (block.x, block.y):
+                return -1.0
+        return 0.0
+
+    def _head_cell_status(self, dead: bool) -> tuple[float, float, float]:
+        if dead: 
+            return -1.0, -1.0, -1.0
+        
+        left = {0:2, 2:1, 1:3, 3:0}
+        right = {0:3, 3:1, 1:2, 2:0}
+        step = {
+            0: (0, -1),
+            1: (0, 1),
+            2: (-1, 0),
+            3: (1, 0),
+        }
+
+        hx, hy = self.head.x, self.head.y
+        fx, fy = step[self.direction]
+        lx, ly = step[left[self.direction]]
+        rx, ry = step[right[self.direction]]
+
+        front = self._cell_status(hx+fx, hy+fy)
+        left = self._cell_status(hx+lx, hy+ly)
+        right = self._cell_status(hx+rx, hy+ry)
+        return front, left, right
+    
     def calc_reward(self):
         if self.dist_reward == 0.0:
             return 0

@@ -10,7 +10,7 @@ class SnakeEnv(gym.Env):
         self.render_mode = render_mode
         self.action_space = spaces.Discrete(4)
         self.observation_space = spaces.Box(
-            float("-inf"), float("inf"), shape=(6,))
+            float("-inf"), float("inf"), shape=(10,))
         self.snake = Snake(**kwargs)
 
     def reset(self, seed=None, options=None):

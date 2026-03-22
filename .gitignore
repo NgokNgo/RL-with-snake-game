@@ -1,2 +1,4 @@
 __pycache__
 tictactoe.ipynb
+runs/
+run.sh
