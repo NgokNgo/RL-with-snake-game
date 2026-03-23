@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import random
 from collections import deque
 from dataclasses import dataclass
@@ -15,20 +16,22 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from snake_game import SnakeEnv
 
 
-GAMMA = 0.99
-LR = 1e-3
-BATCH_SIZE = 64
-BUFFER_SIZE = 10000
-MIN_REPLAY_SIZE = 2000
-TARGET_UPDATE_EVERY = 100
+GAMMA = 0.98
+LR = 8e-4
+LR_END = 1e-5
+LR_DECAY = 0.995
+BATCH_SIZE = 128
+BUFFER_SIZE = 100000
+MIN_REPLAY_SIZE = 5000
+TARGET_UPDATE_EVERY = 50
 MAX_EPISODES = 3000
 MAX_STEPS_PER_EPISODE = 99999
 
 EPS_START = 1.0
-EPS_END = 0.4
-EPS_DECAY = 0.998
+EPS_END = 0.25
+EPS_DECAY = 0.9985
 
-EVAL_EVERY = 50
+EVAL_EVERY = 25
 EVAL_EPISODES = 50
 
 
@@ -49,10 +52,6 @@ class DQNMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
-
-
-# Backward-compatible alias so existing eval command with --model-class DQNCNN still works.
-DQNCNN = DQNMLP
 
 
 @dataclass
@@ -78,7 +77,7 @@ class ReplayBuffer:
         return len(self.buffer)
 
 
-def select_action(policy_net: DQNCNN, obs: np.ndarray, epsilon: float, n_actions: int, device: torch.device) -> int:
+def select_action(policy_net: DQNMLP, obs: np.ndarray, epsilon: float, n_actions: int, device: torch.device) -> int:
     if random.random() < epsilon:
         return random.randrange(n_actions)
 
@@ -112,7 +111,11 @@ def train_step(
     q_values = policy_net(obs_v).gather(1, actions_v).squeeze(1)
 
     with torch.no_grad():
-        next_q_values = target_net(next_obs_v).max(dim=1).values
+        # next_q_values = target_net(next_obs_v).max(dim=1).values
+        
+        next_actions = policy_net(next_obs_v).argmax(dim=1).unsqueeze(-1)
+        next_q_values = target_net(next_obs_v).gather(1, next_actions).squeeze(1)
+        
         target_values = rewards_v + GAMMA * next_q_values * (1.0 - dones_v)
 
     loss = nn.SmoothL1Loss()(q_values, target_values)
@@ -173,8 +176,38 @@ def main() -> None:
     latest_model_path = run_dir / "dqn_mlp_latest.pth"
     best_model_path = run_dir / "dqn_mlp_best.pth"
     best_score_model_path = run_dir / "dqn_mlp_best_score.pth"
+    hparams_path = run_dir / "hparams.json"
+
+    hparams = {
+        "algo": "dqn_double",
+        "gamma": GAMMA,
+        "lr": LR,
+        "lr_end": LR_END,
+        "lr_decay": LR_DECAY,
+        "batch_size": BATCH_SIZE,
+        "buffer_size": BUFFER_SIZE,
+        "min_replay_size": MIN_REPLAY_SIZE,
+        "target_update_every": TARGET_UPDATE_EVERY,
+        "max_episodes": MAX_EPISODES,
+        "max_steps_per_episode": MAX_STEPS_PER_EPISODE,
+        "eps_start": EPS_START,
+        "eps_end": EPS_END,
+        "eps_decay": EPS_DECAY,
+        "eval_every": EVAL_EVERY,
+        "eval_episodes": EVAL_EPISODES,
+        "env": {
+            "width": 11,
+            "height": 11,
+        },
+        "model": {
+            "name": "DQNMLP",
+            "hidden_size": 256,
+        },
+    }
+    hparams_path.write_text(json.dumps(hparams, indent=2), encoding="utf-8")
 
     epsilon = EPS_START
+    current_lr = LR
     best_eval_reward = -float("inf")
     best_eval_score = -float("inf")
     total_steps = 0
@@ -218,11 +251,14 @@ def main() -> None:
         
         if learning_flag:
             epsilon = max(EPS_END, epsilon * EPS_DECAY)
-            # epsilon = 0.778
+            # current_lr = max(LR_END, current_lr * LR_DECAY)
+            # for param_group in optimizer.param_groups:
+            #     param_group["lr"] = current_lr
 
         writer.add_scalar("train/episode_reward", ep_reward, episode)
         writer.add_scalar("train/episode_length", ep_len, episode)
         writer.add_scalar("train/epsilon", epsilon, episode)
+        writer.add_scalar("train/lr", current_lr, episode)
 
         if learning_flag and episode % EVAL_EVERY == 0:
             eval_reward, eval_score, eval_length = evaluate(eval_env, policy_net, device, EVAL_EPISODES)
@@ -236,6 +272,7 @@ def main() -> None:
                     "episode": episode,
                     "total_steps": total_steps,
                     "epsilon": epsilon,
+                    "lr": current_lr,
                     "eval_reward": eval_reward,
                     "obs_size": obs_size,
                     "n_actions": n_actions,
@@ -251,6 +288,7 @@ def main() -> None:
                         "episode": episode,
                         "total_steps": total_steps,
                         "epsilon": epsilon,
+                        "lr": current_lr,
                         "eval_reward": eval_reward,
                         "obs_size": obs_size,
                         "n_actions": n_actions,
@@ -266,6 +304,7 @@ def main() -> None:
                         "episode": episode,
                         "total_steps": total_steps,
                         "epsilon": epsilon,
+                        "lr": current_lr,
                         "eval_reward": eval_reward,
                         "eval_score": eval_score,
                         "obs_size": obs_size,
@@ -276,12 +315,14 @@ def main() -> None:
 
             print(
                 f"Episode {episode} | train_reward={ep_reward:.2f} | "
-                f"eval_reward={eval_reward:.2f} | eval_score={eval_score:.2f} | epsilon={epsilon:.3f}"
+                f"eval_reward={eval_reward:.2f} | eval_score={eval_score:.2f} | "
+                f"epsilon={epsilon:.3f} | lr={current_lr:.6f}"
             )
 
     print(f"Saved latest model to: {latest_model_path}")
     print(f"Saved best model to: {best_model_path}")
     print(f"Saved best score model to: {best_score_model_path}")
+    print(f"Saved hyperparameters to: {hparams_path}")
 
     writer.close()
     train_env.close()

@@ -15,6 +15,7 @@ import torch.nn as nn
 from gymnasium import spaces
 
 from snake_game import SnakeEnv
+from strategy import get_safe_action
 
 
 def set_seed(seed: int) -> None:
@@ -104,6 +105,11 @@ def build_parser() -> argparse.Namespace:
         type=int,
         default=42,
         help="Random seed for reproducible evaluation",
+    )
+    parser.add_argument(
+        "--use-strategy",
+        action="store_true",
+        help="Apply safety strategy on top of model action ranking",
     )
     return parser.parse_args()
 
@@ -231,6 +237,64 @@ def pick_action(logits: torch.Tensor) -> int:
     return int(torch.argmax(logits, dim=1).item())
 
 
+def rank_actions(logits: torch.Tensor) -> list[int]:
+    ranked = torch.argsort(logits.squeeze(0), descending=True)
+    return [int(a.item()) for a in ranked]
+
+
+def _effective_action(current_direction: int, action: int) -> int:
+    # Match Snake.step direction constraints: opposite direction keeps previous heading.
+    if (action in (0, 1) and current_direction in (0, 1)) or (action in (2, 3) and current_direction in (2, 3)):
+        return current_direction
+    return action
+
+
+def _next_pos_from_action(head: tuple[int, int], action: int) -> tuple[int, int]:
+    dx_dy = {
+        0: (0, -1),
+        1: (0, 1),
+        2: (-1, 0),
+        3: (1, 0),
+    }
+    dx, dy = dx_dy[action]
+    return (head[0] + dx, head[1] + dy)
+
+
+def _choose_strategy_action(
+    env_base: SnakeEnv,
+    ranked_actions: list[int],
+    board_width: int,
+    board_height: int,
+) -> int:
+    snake = env_base.snake
+    head = (snake.head.x, snake.head.y)
+
+    # strategy.get_safe_action expects tail at the last element.
+    body_from_head_to_tail = [head, *[(b.x, b.y) for b in reversed(snake.body)]]
+
+    action_to_next_pos: dict[int, tuple[int, int]] = {}
+    sorted_next_positions: list[tuple[int, int]] = []
+    for action in ranked_actions:
+        eff_action = _effective_action(snake.direction, action)
+        next_pos = _next_pos_from_action(head, eff_action)
+        action_to_next_pos[action] = next_pos
+        sorted_next_positions.append(next_pos)
+
+    safe_next_pos = get_safe_action(
+        head=head,
+        body=body_from_head_to_tail,
+        sorted_actions=sorted_next_positions,
+        width=board_width,
+        height=board_height,
+    )
+
+    for action in ranked_actions:
+        if action_to_next_pos[action] == safe_next_pos:
+            return action
+
+    return ranked_actions[0]
+
+
 def resolve_obs_type(args_obs_type: str, checkpoint: tt.Any) -> str:
     if not isinstance(checkpoint, dict):
         return "vector" if args_obs_type == "auto" else args_obs_type
@@ -253,10 +317,14 @@ def resolve_obs_type(args_obs_type: str, checkpoint: tt.Any) -> str:
 
 def evaluate_policy(
     env,
+    env_base: SnakeEnv,
     model: nn.Module,
     episodes: int,
     device: torch.device,
     seed: int,
+    use_strategy: bool,
+    board_width: int,
+    board_height: int,
 ) -> tuple[list[float], list[int], list[int]]:
     rewards: list[float] = []
     scores: list[int] = []
@@ -271,7 +339,16 @@ def evaluate_policy(
             obs_v = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
             with torch.no_grad():
                 logits = model(obs_v)
-            action = pick_action(logits)
+            if use_strategy:
+                ranked_actions = rank_actions(logits)
+                action = _choose_strategy_action(
+                    env_base=env_base,
+                    ranked_actions=ranked_actions,
+                    board_width=board_width,
+                    board_height=board_height,
+                )
+            else:
+                action = pick_action(logits)
 
             obs, reward, terminated, truncated, info = env.step(action)
             ep_reward += float(reward)
@@ -390,10 +467,14 @@ def main() -> None:
 
     rewards, scores, lengths = evaluate_policy(
         env=env,
+        env_base=env_base,
         model=model,
         episodes=args.episodes,
         device=device,
         seed=args.seed,
+        use_strategy=args.use_strategy,
+        board_width=args.width,
+        board_height=args.height,
     )
 
     print("Evaluation done")
