@@ -9,11 +9,11 @@ class Snake:
         fps=60,
         max_step=99999,
         init_length=4,
-        food_reward=2.0,
+        food_reward=6.0,
         dist_reward=None,
         living_bonus=0.0,
-        death_penalty=-1.0,
-        no_food_penalty=-0.002,
+        death_penalty=-10.0,
+        no_food_penalty=-0.006,
         steps_since_food = 0,
         width=40,
         height=40,
@@ -106,7 +106,7 @@ class Snake:
             for block in self.body:
                 if self.head == block:
                     dead = True
-            if self.head.x >= self.blocks_x or self.head.x < 0 or self.head.y < 0 or self.head.y >= self.blocks_x:
+            if self.head.x >= self.blocks_x or self.head.x < 0 or self.head.y < 0 or self.head.y >= self.blocks_y:
                 dead = True
 
         if not dead and self.steps_since_food > self.food_limit:
@@ -132,7 +132,8 @@ class Snake:
             return 0, 0, 0, 0
         self.map = np.zeros((self.blocks_x, self.blocks_y), dtype=int)
         for block in self.blocks:
-            self.map[block.x][block.y] = -1
+            if block.x >= 0 and block.x < self.blocks_x and block.y >= 0 and block.y < self.blocks_y:
+                self.map[block.x][block.y] = -1
         self.map[self.food.block.x][self.food.block.y] = 0
         d0, d1, d2, d3 = 0, 0, 0, 0,
         x, y = self.head.x, self.head.y - 1

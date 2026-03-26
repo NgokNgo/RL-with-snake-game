@@ -130,7 +130,7 @@ if __name__ == "__main__":
             print("Scores: median=%.1f, max=%.1f, min=%.1f" % (np.median(test_scores), np.max(test_scores), np.min(test_scores)))
             print("Episode length: median=%.1f, max=%.1f, min=%.1f" % (np.median(test_lengths), np.max(test_lengths), np.min(test_lengths)))
             best_reward = test_reward
-        if test_reward > 10:
+        if np.max(test_scores) > 10:
             print("Solved in %d iterations!" % iter_no)
             break
 

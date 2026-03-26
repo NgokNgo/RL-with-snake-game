@@ -16,19 +16,19 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from snake_game import SnakeEnv
 
 
-GAMMA = 0.98
-LR = 8e-4
-LR_END = 1e-5
-LR_DECAY = 0.995
+GAMMA = 0.9
+LR = 1e-3
+LR_END = 5e-5
+LR_DECAY = 0.9986
 BATCH_SIZE = 128
-BUFFER_SIZE = 100000
+BUFFER_SIZE = 300000
 MIN_REPLAY_SIZE = 5000
 TARGET_UPDATE_EVERY = 50
 MAX_EPISODES = 3000
 MAX_STEPS_PER_EPISODE = 99999
 
 EPS_START = 1.0
-EPS_END = 0.25
+EPS_END = 0.01
 EPS_DECAY = 0.9985
 
 EVAL_EVERY = 25
@@ -156,12 +156,12 @@ def evaluate(env: SnakeEnv, policy_net: DQNMLP, device: torch.device, episodes: 
 def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_env = SnakeEnv(width=11, height=11)
+    env = SnakeEnv(width=11, height=11)
     eval_env = SnakeEnv(width=11, height=11)
 
-    assert train_env.observation_space.shape is not None
-    obs_size = int(train_env.observation_space.shape[0])
-    n_actions = int(train_env.action_space.n)
+    assert env.observation_space.shape is not None
+    obs_size = int(env.observation_space.shape[0])
+    n_actions = int(env.action_space.n)
 
     policy_net = DQNMLP(obs_size=obs_size, n_actions=n_actions).to(device)
     target_net = DQNMLP(obs_size=obs_size, n_actions=n_actions).to(device)
@@ -211,16 +211,15 @@ def main() -> None:
     best_eval_reward = -float("inf")
     best_eval_score = -float("inf")
     total_steps = 0
-    learning_flag = False
 
     for episode in range(1, MAX_EPISODES + 1):
-        obs, _ = train_env.reset()
+        obs, _ = env.reset()
         ep_reward = 0.0
         ep_len = 0
 
         for _ in range(MAX_STEPS_PER_EPISODE):
             action = select_action(policy_net, obs, epsilon, n_actions, device)
-            next_obs, reward, terminated, truncated, _ = train_env.step(action)
+            next_obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
             replay.add(
@@ -238,47 +237,33 @@ def main() -> None:
             ep_len += 1
             total_steps += 1
 
-            if len(replay) >= MIN_REPLAY_SIZE:
-                learning_flag = True
-                loss = train_step(policy_net, target_net, replay, optimizer, device)
-                writer.add_scalar("train/loss", loss, total_steps)
+            if len(replay) < MIN_REPLAY_SIZE:
+                continue
 
             if total_steps % TARGET_UPDATE_EVERY == 0:
                 target_net.load_state_dict(policy_net.state_dict())
+            
+            loss = train_step(policy_net, target_net, replay, optimizer, device)
+            writer.add_scalar("train/loss", loss, total_steps)
 
             if done:
                 break
         
-        if learning_flag:
             epsilon = max(EPS_END, epsilon * EPS_DECAY)
-            # current_lr = max(LR_END, current_lr * LR_DECAY)
-            # for param_group in optimizer.param_groups:
-            #     param_group["lr"] = current_lr
+            current_lr = max(LR_END, current_lr * LR_DECAY)
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = current_lr
 
         writer.add_scalar("train/episode_reward", ep_reward, episode)
         writer.add_scalar("train/episode_length", ep_len, episode)
         writer.add_scalar("train/epsilon", epsilon, episode)
         writer.add_scalar("train/lr", current_lr, episode)
 
-        if learning_flag and episode % EVAL_EVERY == 0:
+        if episode % EVAL_EVERY == 0:
             eval_reward, eval_score, eval_length = evaluate(eval_env, policy_net, device, EVAL_EPISODES)
             writer.add_scalar("eval/reward_mean", eval_reward, episode)
             writer.add_scalar("eval/score_mean", eval_score, episode)
             writer.add_scalar("eval/length_mean", eval_length, episode)
-
-            torch.save(
-                {
-                    "state_dict": policy_net.state_dict(),
-                    "episode": episode,
-                    "total_steps": total_steps,
-                    "epsilon": epsilon,
-                    "lr": current_lr,
-                    "eval_reward": eval_reward,
-                    "obs_size": obs_size,
-                    "n_actions": n_actions,
-                },
-                latest_model_path,
-            )
 
             if eval_reward > best_eval_reward:
                 best_eval_reward = eval_reward
@@ -319,13 +304,12 @@ def main() -> None:
                 f"epsilon={epsilon:.3f} | lr={current_lr:.6f}"
             )
 
-    print(f"Saved latest model to: {latest_model_path}")
     print(f"Saved best model to: {best_model_path}")
     print(f"Saved best score model to: {best_score_model_path}")
     print(f"Saved hyperparameters to: {hparams_path}")
 
     writer.close()
-    train_env.close()
+    env.close()
     eval_env.close()
 
 
