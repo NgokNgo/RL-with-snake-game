@@ -123,9 +123,69 @@ class Snake:
         dx, dy = normalize(dx, dy)
         d0, d1, d2, d3 = self.calc_distance(dead)
         front, left, right = self._head_cell_status(dead)
+        ray_features = self._raycast_vision(dead)
+        tail_features = self._tail_tracking(dead)
         # chieu dai ran 
         body_len = len(self.body)/ max(1, self.blocks_x*self.blocks_y)
-        return np.array([dx, dy, d0, d1, d2, d3, front, left, right, body_len], dtype=np.float32)
+        # return np.array([dx, dy, d0, d1, d2, d3, front, left, right, body_len, *ray_features], dtype=np.float32)
+        return np.array([dx, dy, front, left, right, body_len, *ray_features], dtype=np.float32)
+
+    def _tail_tracking(self, dead: bool) -> list[float]:
+        if dead or len(self.body) == 0:
+            return [0.0, 0.0, 0.0, 0.0]
+
+        tail = self.body[0]
+        hx, hy = self.head.x, self.head.y
+        tx, ty = tail.x, tail.y
+
+        tail_up = 1.0 if ty < hy else 0.0
+        tail_down = 1.0 if ty > hy else 0.0
+        tail_left = 1.0 if tx < hx else 0.0
+        tail_right = 1.0 if tx > hx else 0.0
+        return [tail_up, tail_down, tail_left, tail_right]
+
+    def _raycast_vision(self, dead: bool) -> list[float]:
+        # 8 tia: len, xuong, trai, phai, 4 huong cheo
+        directions = [
+            (0, -1),
+            (0, 1),
+            (-1, 0),
+            (1, 0),
+            (-1, -1),
+            (1, -1),
+            (-1, 1),
+            (1, 1),
+        ]
+        if dead:
+            return [0.0] * (len(directions) * 2)
+
+        body_cells = {(b.x, b.y) for b in self.body}
+        hx, hy = self.head.x, self.head.y
+        max_dist = math.sqrt((self.blocks_x - 1) ** 2 + (self.blocks_y - 1) ** 2)
+        features: list[float] = []
+
+        for sx, sy in directions:
+            x, y = hx, hy
+            steps = 0
+            food_on_ray = 0.0
+
+            while True:
+                x += sx
+                y += sy
+                steps += 1
+
+                if x < 0 or x >= self.blocks_x or y < 0 or y >= self.blocks_y:
+                    break
+                if (x, y) in body_cells:
+                    break
+                if x == self.food.block.x and y == self.food.block.y:
+                    food_on_ray = 1.0
+
+            obstacle_dist = min(1.0, steps / max_dist) if max_dist > 0 else 0.0
+            features.append(obstacle_dist)
+            features.append(food_on_ray)
+
+        return features
 
     def calc_distance(self, dead):
         if dead:

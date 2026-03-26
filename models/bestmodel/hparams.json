@@ -1,0 +1,26 @@
+{
+  "algo": "dqn_double",
+  "gamma": 0.9,
+  "lr": 0.001,
+  "lr_end": 5e-05,
+  "lr_decay": 0.9986,
+  "batch_size": 128,
+  "buffer_size": 300000,
+  "min_replay_size": 5000,
+  "target_update_every": 50,
+  "max_episodes": 3000,
+  "max_steps_per_episode": 99999,
+  "eps_start": 1.0,
+  "eps_end": 0.01,
+  "eps_decay": 0.9985,
+  "eval_every": 25,
+  "eval_episodes": 50,
+  "env": {
+    "width": 11,
+    "height": 11
+  },
+  "model": {
+    "name": "DQNMLP",
+    "hidden_size": 256
+  }
+}
